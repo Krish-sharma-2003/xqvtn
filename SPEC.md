@@ -62,3 +62,4 @@ Logic modules are pure functions (no I/O) so they are unit-testable. Only loader
 - M5: Accuracy page.
 - M6: Dockerfiles + docker-compose (docker compose up works) + Vercel deploy (one project: static frontend + FastAPI under /api; make sure data/ is bundled; follow current Vercel docs).
 - M7: README (files, how to start, deployed link, AI-tools disclosure, assumptions, metric definitions) + polish.
+
