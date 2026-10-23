@@ -58,10 +58,10 @@ class DecisionSummary(BaseModel):
 
     model_config = _MODEL_CONFIG
 
-    forecast_mean: float = Field(description="Mean of the 24 hourly forecasts (MW).")
-    forecast_min: float = Field(description="Minimum hourly forecast (MW).")
-    forecast_max: float = Field(description="Maximum hourly forecast (MW).")
-    buffer_mean: float = Field(description="Mean of the 24 hourly buffers (MW).")
+    forecast_mean: float | None = Field(description="Mean of the 24 hourly forecasts (MW).")
+    forecast_min: float | None = Field(description="Minimum hourly forecast (MW).")
+    forecast_max: float | None = Field(description="Maximum hourly forecast (MW).")
+    buffer_mean: float | None = Field(description="Mean of the 24 hourly buffers (MW).")
     in_sample: bool = Field(
         description="True when error stats fall back to all-January data (fewer than 3 usable target days)."
     )

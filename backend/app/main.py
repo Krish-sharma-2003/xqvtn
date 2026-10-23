@@ -1,12 +1,11 @@
 """FastAPI application for the wind forecast decision support app.
-
+ 
 Loads data once at startup into app.state. Handlers do no file I/O. CORS is
 enabled for the Vite dev server origin http://localhost:5173.
 """
 
 from __future__ import annotations
 
-import math
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 
@@ -17,12 +16,13 @@ from .align import build_hourly_actuals
 from .decision import compute_cutoff, select_decision_forecast
 from .loader import load_actuals, load_forecasts
 from .metrics import (
+    allowed_stat_days,
     build_pairs_from_decision,
-    compute_decision_metrics_with_lookahead_rule,
     compute_metrics_by_horizon_bucket,
     conservative_forecast,
     error_histogram,
     error_metrics,
+    horizon_bucket,
 )
 from .schemas import (
     AccuracyByHourResponse,
@@ -82,6 +82,16 @@ async def lifespan(app: FastAPI):
     app.state.actuals = actuals
     app.state.forecasts = forecasts
     app.state.hourly_actuals = build_hourly_actuals(actuals)
+    # Compute all target days once at startup
+    all_target_days = set()
+    for row in forecasts:
+        horizon = (row.startTime - row.publishTime).total_seconds() / 3600.0
+        if horizon >= 0:
+            d = row.startTime.date()
+            if TARGET_DAYS_START <= d <= TARGET_DAYS_END:
+                all_target_days.add(d)
+    app.state.all_target_days = all_target_days
+    app.state.bucket_stats_by_day = {}
     yield
 
 
@@ -136,11 +146,23 @@ def decision(
     d = _parse_day(day)
     c = _validate_cutoff(cutoff)
     forecasts = request.app.state.forecasts
-    actuals_rows = request.app.state.actuals
     hourly_actuals = request.app.state.hourly_actuals
+    all_target_days = getattr(request.app.state, "all_target_days", set())
 
     points_map = select_decision_forecast(forecasts, d, c)
-    bucket_metrics = compute_metrics_by_horizon_bucket(forecasts, hourly_actuals)
+
+    # Determine allowed days for stats
+    allowed_days, in_sample = allowed_stat_days(all_target_days, d)
+
+    # Cache bucket stats per target_day (they do not depend on cutoff)
+    if not hasattr(request.app.state, "bucket_stats_by_day"):
+        request.app.state.bucket_stats_by_day = {}
+    cache_key = d.isoformat()
+    if cache_key not in request.app.state.bucket_stats_by_day:
+        request.app.state.bucket_stats_by_day[cache_key] = compute_metrics_by_horizon_bucket(
+            forecasts, hourly_actuals, days=allowed_days
+        )
+    bucket_metrics = request.app.state.bucket_stats_by_day[cache_key]
 
     points = []
     forecasts_list = []
@@ -153,7 +175,7 @@ def decision(
             forecast = dp.forecast
             publish_time = dp.publishTime
             horizon_h = dp.horizon_h
-            bstart = math.floor(horizon_h / 6.0) * 6.0
+            bstart = horizon_bucket(horizon_h)
             bm = bucket_metrics.get(bstart)
             sp90 = bm["shortfall_p90"] if (bm and bm.get("shortfall_p90") is not None) else 0.0
             cons, buf = conservative_forecast(forecast, sp90)
@@ -165,23 +187,39 @@ def decision(
             horizon_h = None
             cons = None
             buf = None
-        points.append(HourlyPoint(
-            startTime=start,
-            forecast=forecast,
-            publishTime=publish_time,
-            horizon_h=horizon_h,
-            actual=actual,
-            conservative=cons,
-            buffer=buf,
-        ))
+        points.append(
+            HourlyPoint(
+                startTime=start,
+                forecast=forecast,
+                publishTime=publish_time,
+                horizon_h=horizon_h,
+                actual=actual,
+                conservative=cons,
+                buffer=buf,
+            )
+        )
 
-    _, in_sample = compute_decision_metrics_with_lookahead_rule(forecasts, actuals_rows, d, c)
-
-    fmean = sum(forecasts_list) / len(forecasts_list) if forecasts_list else 0.0
-    fmin = min(forecasts_list) if forecasts_list else 0.0
-    fmax = max(forecasts_list) if forecasts_list else 0.0
-    bmean = sum(buffers) / len(buffers) if buffers else 0.0
     cutoff_utc = compute_cutoff(d, c)
+
+    if not forecasts_list:
+        return DecisionResponse(
+            day=d.isoformat(),
+            cutoff=c,
+            points=points,
+            summary=DecisionSummary(
+                forecast_mean=None,
+                forecast_min=None,
+                forecast_max=None,
+                buffer_mean=None,
+                in_sample=in_sample,
+                cutoff_utc=cutoff_utc,
+            ),
+        )
+
+    fmean = sum(forecasts_list) / len(forecasts_list)
+    fmin = min(forecasts_list)
+    fmax = max(forecasts_list)
+    bmean = sum(buffers) / len(buffers)
 
     return DecisionResponse(
         day=d.isoformat(),

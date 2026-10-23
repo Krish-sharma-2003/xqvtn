@@ -1,5 +1,5 @@
 """Error metrics for wind forecasts (pure functions, no I/O).
-
+ 
 All functions are deterministic and testable with hand-made inputs. Percentiles
 use linear interpolation (NumPy default). Horizon buckets are 6h-wide intervals
 [0,6) ... [60,72).
@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import math
 from datetime import date, timedelta
-from typing import Iterable
 
 from .align import build_hourly_actuals
-from .decision import DecisionPoint, compute_cutoff, select_decision_forecast
+from .decision import select_decision_forecast
 from .loader import ActualsRow, ForecastRow
 
 
@@ -131,6 +130,32 @@ def horizon_bucket(horizon_h: float) -> float:
     return bucket_start
 
 
+def allowed_stat_days(
+    all_target_days: set[date] | list[date], target_day: date, min_days: int = 3
+) -> tuple[set[date], bool]:
+    """Return the set of days to use for stats and whether in_sample.
+
+    Stats for decision day D use only target days <= D-2.
+    If fewer than 3 such days, fall back to all days with in_sample=true.
+    """
+    if isinstance(all_target_days, list):
+        all_target_days_set = set(all_target_days)
+    else:
+        all_target_days_set = set(all_target_days)
+
+    allowed_days = set()
+    for d in all_target_days_set:
+        if d <= target_day - timedelta(days=2):
+            allowed_days.add(d)
+
+    in_sample = False
+    if len(allowed_days) < min_days:
+        allowed_days = all_target_days_set.copy()
+        in_sample = True
+
+    return allowed_days, in_sample
+
+
 def conservative_forecast(forecast: float, shortfall_p90: float) -> tuple[float, float]:
     """Compute conservative forecast.
 
@@ -155,25 +180,30 @@ def error_histogram(errors: list[float], bin_width: float) -> list[dict]:
     min_err = min(errors)
     max_err = max(errors)
     bin_start = math.floor(min_err / bin_width) * bin_width
-    bins = []
+    bins_dict = {}
     current = bin_start
-    while current <= max_err + 1e-10:
+    # Build all bins up to cover max_err
+    while current <= max_err + 1e-12:
         bin_end = current + bin_width
-        count = sum(1 for e in errors if current <= e < bin_end)
-        # If it's the last bin and there might be values at the edge
-        if bin_end > max_err and abs(max_err - bin_end) >= 1e-10:  # not exact edge
-            pass
-        bins.append({"bin_start": current, "bin_end": bin_end, "count": count})
+        bins_dict[current] = {"bin_start": current, "bin_end": bin_end, "count": 0}
         current = bin_end
-        if len(bins) > 10000:
-            break
-    # Fix last bin to include values equal to max_err if they ended up missed
-    if bins:
-        total_counted = sum(b["count"] for b in bins)
-        if total_counted < len(errors):
-            # Add remaining to last bin
-            bins[-1]["count"] += (len(errors) - total_counted)
-    return bins
+    # Assign each error to bin: bin index = floor((e - bin_start)/bin_width)
+    for e in errors:
+        b = math.floor((e - bin_start) / bin_width) * bin_width
+        if b not in bins_dict:
+            # Extend if necessary
+            # but should be covered
+            pass
+        if b in bins_dict:
+            bins_dict[b]["count"] += 1
+        else:
+            # find/create
+            bins_dict[b] = {"bin_start": b, "bin_end": b + bin_width, "count": 1}
+    # Return sorted by bin_start
+    result = []
+    for k in sorted(bins_dict.keys()):
+        result.append(bins_dict[k])
+    return result
 
 
 def build_pairs_from_decision(
@@ -189,26 +219,25 @@ def build_pairs_from_decision(
         actual = None
         if start_time in hourly_actuals:
             actual = hourly_actuals[start_time]
-        elif hasattr(dp, 'startTime') and dp.startTime in hourly_actuals:
+        elif hasattr(dp, "startTime") and dp.startTime in hourly_actuals:
             actual = hourly_actuals[dp.startTime]
-        if actual is not None:
-            if hasattr(dp, 'forecast'):
-                pairs.append((dp.forecast, actual))
-            else:
-                # if it's just a tuple or different structure
-                pass
+        if actual is not None and hasattr(dp, "forecast"):
+            pairs.append((dp.forecast, actual))
     return pairs
 
 
 def compute_metrics_by_horizon_bucket(
     forecasts: list[ForecastRow],
     hourly_actuals: dict,
+    days: set[date] | None = None,
 ) -> dict[float, dict]:
-    """Group all forecast rows (horizon >= 0) by horizon bucket and compute error_metrics per bucket."""
+    """Group forecast rows (horizon >= 0) by horizon bucket and compute error_metrics per bucket."""
     bucket_to_rows = {}
     for row in forecasts:
         horizon = (row.startTime - row.publishTime).total_seconds() / 3600.0
         if horizon < 0:
+            continue
+        if days is not None and row.startTime.date() not in days:
             continue
         b = horizon_bucket(horizon)
         if b not in bucket_to_rows:
@@ -244,15 +273,7 @@ def compute_decision_metrics_with_lookahead_rule(
         if horizon >= 0:
             all_target_days.add(row.startTime.date())
 
-    allowed_days = set()
-    for d in all_target_days:
-        if d <= target_day - timedelta(days=2):
-            allowed_days.add(d)
-
-    in_sample = False
-    if len(allowed_days) < 3:
-        allowed_days = all_target_days.copy()
-        in_sample = True
+    allowed_days, in_sample = allowed_stat_days(all_target_days, target_day)
 
     all_pairs = []
     for d in allowed_days:
@@ -264,7 +285,7 @@ def compute_decision_metrics_with_lookahead_rule(
     return metrics, in_sample
 
 
-def group_by_horizon_bucket_forecasts(
+def _group_by_horizon_bucket_forecasts(
     forecasts: list[ForecastRow],
 ) -> dict[float, list[ForecastRow]]:
     """Group all forecast rows (horizon >= 0) by horizon bucket."""
@@ -280,5 +301,6 @@ def group_by_horizon_bucket_forecasts(
     return bucket_to_rows
 
 
-# Keep old name for compatibility if needed
-group_by_horizon_bucket = group_by_horizon_bucket_forecasts
+# Backward compatible names if needed elsewhere
+group_by_horizon_bucket_forecasts = _group_by_horizon_bucket_forecasts
+group_by_horizon_bucket = _group_by_horizon_bucket_forecasts

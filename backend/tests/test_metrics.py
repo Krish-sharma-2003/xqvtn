@@ -15,6 +15,7 @@ from app.metrics import (
     group_by_horizon_bucket,
     compute_metrics_by_horizon_bucket,
     compute_decision_metrics_with_lookahead_rule,
+    allowed_stat_days,
 )
 from app.decision import DecisionPoint
 from app.loader import ForecastRow, ActualsRow
@@ -169,3 +170,28 @@ def test_look_ahead_fallback() -> None:
     metrics, in_sample = compute_decision_metrics_with_lookahead_rule(forecasts, actuals_rows, target_day, "09:00")
     # Fewer than 3 days, so should fall back to all days and set in_sample=True
     assert in_sample is True
+
+
+def test_allowed_stat_days_few():
+    all_days = {date(2026, 1, 1), date(2026, 1, 2)}  # only 2 days
+    allowed, in_sample = allowed_stat_days(all_days, date(2026, 1, 10))
+    assert in_sample is True
+    assert allowed == all_days
+
+
+def test_allowed_stat_days_enough():
+    all_days = {date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3), date(2026, 1, 4)}
+    target = date(2026, 1, 10)
+    allowed, in_sample = allowed_stat_days(all_days, target)
+    assert in_sample is False
+    # days <= target-2 = days <= 2026-01-08, so all of them qualify
+    assert allowed == all_days
+
+
+def test_allowed_stat_days_cutoff():
+    all_days = {date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3), date(2026, 1, 5)}
+    target = date(2026, 1, 5)
+    allowed, in_sample = allowed_stat_days(all_days, target)
+    assert in_sample is False
+    # target-2 = 2026-01-03, so days <= 2026-01-03 are 1,2,3
+    assert allowed == {date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)}
