@@ -6,3 +6,4 @@
 - No secrets, no .env committed, no hard-coded absolute paths.
 - Keep it simple: no extra libraries unless needed, and say why when adding one.
 - After finishing, print a 5-line summary: files changed, how to run, what to verify manually.
+- Think and respond in English only. Keep reasoning short; do not re-plan what SPEC.md already states.
