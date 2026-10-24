@@ -16,6 +16,8 @@ import {
 import type { CutoffSensitivityResponse, DecisionResponse } from '../types'
 import { createDecisionClient } from '../api'
 import { ChartCard } from '../components/ChartCard'
+import { CardHeader } from '../components/CardHeader'
+import { yAxisProps } from '../components/chartAxis'
 import { Chip } from '../components/Chip'
 import { ErrorState } from '../components/ErrorState'
 import { KpiCard } from '../components/KpiCard'
@@ -211,34 +213,48 @@ function SensitivityTooltip({
 function SensitivityChart({
   data,
   onPick,
+  selectedCutoff,
 }: {
   data: SensitivityPoint[]
   onPick: (cutoff: string) => void
+  selectedCutoff: string
 }) {
+  const width = useWindowWidth()
   return (
-    <ResponsiveContainer width="100%" height={180}>
-      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 26, left: 52 }}>
+    <ResponsiveContainer width="100%" height={width < 640 ? 220 : 200}>
+      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 26, left: 64 }}>
         <XAxis
           dataKey="cutoff"
           type="category"
-          tick={{ fontSize: 11, fill: '#94a3b8' }}
+          tick={{ fontSize: 11, fill: '#b6c2d6' }}
           axisLine={false}
           tickLine={false}
         />
-        <YAxis
-          type="number"
-          label={{ value: 'MW', position: 'insideLeft', offset: 0, fill: '#94a3b8', fontSize: 11 }}
-          domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 50) / 50) * 50, Math.ceil((dataMax + 50) / 50) * 50]}
-        />
+        <YAxis type="number" {...yAxisProps} domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 50) / 50) * 50, Math.ceil((dataMax + 50) / 50) * 50]} />
+        <ReferenceLine x={selectedCutoff} stroke="var(--accent)" strokeDasharray="4 4" label={{ value: 'selected', position: 'top', fill: 'var(--accent)', fontSize: 11 }} />
         <Line
           dataKey="mean_forecast"
           stroke="#22d3ee"
           strokeWidth={2}
-          dot={{ fill: '#22d3ee', stroke: '#070a14', strokeWidth: 1 }}
+          dot={({ cx, cy, payload }: any) => {
+            const isSel = payload?.cutoff === selectedCutoff
+            return (
+              <circle
+                cx={cx}
+                cy={cy}
+                r={isSel ? 5 : 3}
+                fill="#22d3ee"
+                stroke="#070a14"
+                strokeWidth={isSel ? 2 : 1}
+                className={isSel ? 'selected-cutoff-dot' : undefined}
+              />
+            )
+          }}
+          activeDot={{ r: 6 }}
           onClick={(event: unknown) => {
             const picked = event as { payload?: { cutoff?: string } | null }
-            const cutoff = picked.payload?.cutoff
-            if (typeof cutoff === 'string') onPick(cutoff)
+            const c = picked.payload?.cutoff
+            if (typeof c === 'string') onPick(c)
           }}
         />
         <Tooltip content={SensitivityTooltip} />
@@ -483,7 +499,11 @@ export default function Decision() {
             <div className="empty">No decision data available for {fmtDay(day)}.</div>
           ) : (
             <>
-              <ChartCard title={`Decision forecast — ${fmtDay(day)}`}>
+              <ChartCard
+                title={`Decision forecast - ${fmtDay(day)}`}
+                subtitle="Latest forecast available at the selected cutoff"
+                unitChip="MW"
+              >
                 <ResponsiveContainer width="100%" height={width < 640 ? 240 : 300}>
                   <ComposedChart data={chartData} margin={{ top: 18, right: 20, bottom: 44, left: 64 }}>
                     <CartesianGrid strokeDasharray="2 2" stroke="rgba(255, 255, 255, 0.10)" vertical={false} />
@@ -495,13 +515,8 @@ export default function Decision() {
                       tickLine={false}
                       axisLine={false}
                       tickMargin={10}
-                      label={{ value: 'Hour (UTC)', position: 'bottom', offset: 18, fill: '#94a3b8', fontSize: 11 }}
                     />
-                    <YAxis
-                      type="number"
-                      label={{ value: 'MW', position: 'insideLeft', offset: 0, fill: '#94a3b8', fontSize: 11 }}
-                      domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 100) / 100) * 100, Math.ceil((dataMax + 100) / 100) * 100]}
-                    />
+                    <YAxis type="number" {...yAxisProps} domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 100) / 100) * 100, Math.ceil((dataMax + 100) / 100) * 100]} />
                     {!isHidden('buffer') && (
                       <Area type="monotone" dataKey="forecast" fill="#22d3ee" fillOpacity={0.18} stroke="none" legendType="none" />
                     )}
@@ -543,7 +558,9 @@ export default function Decision() {
                   title="Cutoff (UTC)"
                   value={fmtUtc(summary?.cutoff_utc ?? null)}
                   sub={fmtUtcDay(summary?.cutoff_utc ?? null)}
-                />
+                >
+                  {summary?.in_sample ? <Chip title="Fewer than three usable target days precede this decision day, so the error statistics fall back to all-January data. Treat the buffer as less reliable for this day.">in-sample</Chip> : null}
+                </KpiCard>
               </div>
 
               {summary?.in_sample && (
@@ -554,12 +571,12 @@ export default function Decision() {
                 </div>
               )}
 
-              <ChartCard title="Cutoff sensitivity — mean forecast by cutoff time">
+              <ChartCard title="Cutoff sensitivity" subtitle="Cutoff sensitivity — mean forecast by cutoff time" unitChip="MW">
                 {sensData.length === 0 ? (
                   <div className="empty">No sensitivity data available for {fmtDay(day)}.</div>
                 ) : (
                   <>
-                    <SensitivityChart data={sensData} onPick={handleSensitivityPick} />
+                    <SensitivityChart data={sensData} onPick={handleSensitivityPick} selectedCutoff={cutoff} />
                     <table style={{ marginTop: 10, width: '100%', fontSize: 12 }}>
                       <thead><tr><th>Cutoff</th><th>Publish time</th><th>Mean forecast</th><th>Delta vs selected</th></tr></thead>
                       <tbody>
@@ -589,31 +606,37 @@ export default function Decision() {
                 )}
               </ChartCard>
 
-              <section className="card card-strong table-wrap">
+              <section className="card card-strong card-animated table-wrap">
+                <CardHeader title="24-hour table" unitChip="MW" />
                 <table>
                   <thead>
                     <tr>
                       <th>Hour (UTC)</th>
-                      <th>Forecast (MW)</th>
-                      <th>Conservative (MW)</th>
-                      <th>Buffer (MW)</th>
-                      <th>Actual (MW)</th>
+                      <th className="num">Forecast (MW)</th>
+                      <th className="num">Conservative (MW)</th>
+                      <th className="num">Buffer (MW)</th>
+                      <th className="num">Actual (MW)</th>
+                      <th>Shortfall</th>
                       <th>Publish time</th>
-                      <th>Horizon (h)</th>
+                      <th className="num">Horizon (h)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {points.map((p, index) => (
-                      <tr key={String(index)} onMouseEnter={() => setHoveredHour(index)} onMouseLeave={() => setHoveredHour(null)} style={showActual && p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number) ? { background: 'rgba(248,113,113,0.15)' } : undefined}>
-                        <td>{String(index).padStart(2, '0')}:00</td>
-                        <td className="num">{fmtMw(p.forecast)}</td>
-                        <td className="num">{fmtMw(p.conservative)}</td>
-                        <td className="num">{fmtMw(p.buffer)}</td>
-                        <td className="num">{fmtMw(p.actual)}{showActual && p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number) ? ' shortfall' : ''}</td>
-                        <td>{fmtTime(p.publishTime)}</td>
-                        <td className="num">{fmtHorizon(p.horizon_h)}</td>
-                      </tr>
-                    ))}
+                    {points.map((p, index) => {
+                      const isShortfall = showActual && p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number)
+                      return (
+                        <tr key={String(index)} onMouseEnter={() => setHoveredHour(index)} onMouseLeave={() => setHoveredHour(null)} className="table-row-clickable" style={isShortfall ? { background: 'rgba(248,113,113,0.12)' } : undefined}>
+                          <td>{String(index).padStart(2, '0')}:00</td>
+                          <td className="num">{fmtMw(p.forecast)}</td>
+                          <td className="num">{fmtMw(p.conservative)}</td>
+                          <td className="num">{fmtMw(p.buffer)}</td>
+                          <td className="num">{fmtMw(p.actual)}</td>
+                          <td>{isShortfall ? <span className="shortfall-badge">shortfall</span> : null}</td>
+                          <td>{fmtTime(p.publishTime)}</td>
+                          <td className="num">{fmtHorizon(p.horizon_h)}</td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </section>
