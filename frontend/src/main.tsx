@@ -6,6 +6,7 @@ import '@fontsource/jetbrains-mono'
 import './index.css'
 import './styles.css'
 
+document.title = 'Wind Forecast Decision Support'
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

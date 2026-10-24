@@ -28,7 +28,6 @@ import { Clock, Gauge, TrendingDown } from 'lucide-react'
 const MIN_DAY = '2026-01-02'
 const MAX_DAY = '2026-02-01'
 const DEFAULT_CUTOFF = '09:00'
-const DEBOUNCE_MS = 300
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 interface ChartPoint {
@@ -113,21 +112,6 @@ function useWindowWidth(): number {
   return width
 }
 
-function useDebouncedCallback<A extends unknown[]>(
-  callback: (...args: A) => void,
-  delay: number,
-): (...args: A) => void {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const latest = useRef(callback)
-  latest.current = callback
-  return useCallback(
-    (...args: A) => {
-      if (timer.current !== null) clearTimeout(timer.current)
-      timer.current = setTimeout(() => latest.current(...args), delay)
-    },
-    [delay],
-  )
-}
 
 function firstTooltipPoint(payload: TooltipPayload): ChartPoint | null {
   const raw = payload[0]?.payload ?? null
@@ -314,13 +298,6 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
   const [loading, setLoading] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
-  const runFetch = useDebouncedCallback(
-    (nextDay: string, nextCutoff: string) => {
-      loadDecision(nextDay, nextCutoff)
-    },
-    DEBOUNCE_MS,
-  )
-
   const isHidden = (key: SeriesKey): boolean => hidden.has(key)
 
   const toggleSeries = (key: SeriesKey): void => {
@@ -332,26 +309,32 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
     })
   }
 
+  const requestIdRef = useRef(0)
+
   const loadDecision = useCallback(
     async (nextDay: string, nextCutoff: string) => {
-      setLoading(true)
-      setError(null)
+      const thisId = ++requestIdRef.current
       abortRef.current?.abort()
       const controller = new AbortController()
       abortRef.current = controller
+      setLoading(true)
+      setError(null)
       try {
         const [decision, sens] = await Promise.all([
           client.fetchDecision(nextDay, nextCutoff, controller.signal),
           client.fetchCutoffSensitivity(nextDay, controller.signal),
         ])
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted || thisId !== requestIdRef.current) return
         setData(decision)
         setSensitivity(sens)
+        setError(null)
       } catch (err) {
-        if (controller.signal.aborted) return
+        if (controller.signal.aborted || thisId !== requestIdRef.current) return
+        setData(null)
+        setSensitivity(null)
         setError(err instanceof Error ? err.message : 'Failed to load decision data')
       } finally {
-        if (!controller.signal.aborted) setLoading(false)
+        if (!controller.signal.aborted && thisId === requestIdRef.current) setLoading(false)
       }
     },
     [],
@@ -400,23 +383,19 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
   const handleDay = (next: string): void => {
     const fixed = clampDay(next)
     setDay(fixed)
-    runFetch(fixed, cutoff)
   }
 
   const handleCutoff = (next: string): void => {
     setCutoff(next)
-    runFetch(day, next)
   }
 
   const handleCutoffStep = (delta: number): void => {
     const next = addMinutes(cutoff, delta)
     setCutoff(next)
-    runFetch(day, next)
   }
 
   const handleSensitivityPick = (nextCutoff: string): void => {
     setCutoff(nextCutoff)
-    runFetch(day, nextCutoff)
   }
 
   const conservativeMean = summary && summary.forecast_mean !== null && summary.buffer_mean !== null ? (summary.forecast_mean ?? 0) - (summary.buffer_mean ?? 0) : null
@@ -475,36 +454,41 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
             </div>
           </div>
           <div className="field">
-            <button
-              role="switch"
-              aria-checked={showActual}
-              onClick={() => setShowActual((v) => !v)}
-              onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setShowActual((v) => !v) } }}
-              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: 'none', border: 'none', color: 'var(--text)', padding: 0 }}
-            >
-              <span style={{ width: 34, height: 18, borderRadius: 9, background: showActual ? 'var(--accent)' : 'rgba(255,255,255,0.15)', position: 'relative', transition: 'background .2s' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)' }}>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={showActual}
+                aria-label="Hindsight actuals"
+                onClick={() => setShowActual((v) => !v)}
+                onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setShowActual((v) => !v) } }}
+                className="hindsight-switch"
+                style={{ width: 34, height: 18, borderRadius: 9, background: showActual ? 'var(--accent)' : 'rgba(255,255,255,0.15)', position: 'relative', transition: 'background .2s', border: 'none', cursor: 'pointer', padding: 0 }}
+              >
                 <span style={{ position: 'absolute', top: 2, left: showActual ? 18 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'left .2s' }} />
-              </span>
-              Hindsight actuals: {showActual ? 'Shown' : 'Hidden'}
-            </button>
+              </button>
+              <span>Hindsight actuals: {showActual ? 'Shown' : 'Hidden'}</span>
+            </div>
           </div>
         </div>
       </section>
 
-      {loading && !data ? (
+      {error ? (
+        <ErrorState message={error} onRetry={() => loadDecision(day, cutoff)} />
+      ) : loading && !data ? (
         <Loading />
-      ) : error ? (
-        <ErrorState message={error} onRetry={() => runFetch(day, cutoff)} />
       ) : (
+        <div style={loading ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
         <>
           {points.length === 0 ? (
             <div className="empty">No decision data available for {fmtDay(day)}.</div>
           ) : (
             <>
               <ChartCard
-                title={`Decision forecast - ${fmtDay(day)}`}
+                title={`Decision forecast - ${fmtDay(data?.day ?? day)}`}
                 subtitle="Latest forecast available at the selected cutoff"
                 unitChip="MW"
+                right={loading && data ? <span className="chip">Updating…</span> : undefined}
               >
                 <ResponsiveContainer width="100%" height={width < 640 ? 240 : 300}>
                   <ComposedChart data={chartData} margin={getChartMargin(12)}>
@@ -572,7 +556,7 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
                 </KpiCard>
               </div>
 
-              <ChartCard title="Cutoff sensitivity" subtitle="How the forecast changes if the gate closes earlier or later" unitChip="MW">
+              <ChartCard title="Cutoff sensitivity" subtitle="How the forecast changes if the gate closes earlier or later" unitChip="MW" right={loading && data ? <span className="chip">Updating…</span> : undefined}>
                 {sensData.length === 0 ? (
                   <div className="empty">No sensitivity data available for {fmtDay(day)}.</div>
                 ) : (
@@ -644,7 +628,9 @@ export default function Decision({ initialDay }: { initialDay?: string } = {}) {
             </>
           )}
         </>
+        </div>
       )}
+      <footer className="page-footer">Data: Elexon BMRS (FUELHH, WINDFOR), national wind, January 2026 decisions. Times in UTC.</footer>
     </div>
   )
 }

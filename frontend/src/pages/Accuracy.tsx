@@ -57,12 +57,15 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
   const [loading, setLoading] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
 
+  const requestIdRef = useRef(0)
+
   const load = useCallback(async (nextCutoff: string) => {
-    setLoading(true)
-    setError(null)
+    const thisId = ++requestIdRef.current
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
+    setLoading(true)
+    setError(null)
     try {
       const [s, h, hr, d, e] = await Promise.all([
         client.fetchSummary(nextCutoff, controller.signal),
@@ -71,17 +74,23 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
         client.fetchDaily(nextCutoff, controller.signal),
         client.fetchErrors(nextCutoff, controller.signal),
       ])
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || thisId !== requestIdRef.current) return
       setSummary(s)
       setByHorizon(h)
       setByHour(hr)
       setDaily(d)
       setErrors(e)
+      setError(null)
     } catch (err) {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || thisId !== requestIdRef.current) return
+      setSummary(null)
+      setByHorizon(null)
+      setByHour(null)
+      setDaily(null)
+      setErrors(null)
       setError(err instanceof Error ? err.message : 'Failed to load accuracy data')
     } finally {
-      if (!controller.signal.aborted) setLoading(false)
+      if (!controller.signal.aborted && thisId === requestIdRef.current) setLoading(false)
     }
   }, [])
 
@@ -125,7 +134,7 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
   return (
     <div className="accuracy-page">
       <section className="card card-strong card-animated">
-        <CardHeader title="Accuracy" subtitle="In-sample statistics over all January 2026 target days (decision-time forecasts)" />
+        <CardHeader title="Accuracy" subtitle="In-sample statistics over all January 2026 target days (decision-time forecasts)" right={loading && summary ? <span className="chip">Updating…</span> : undefined} />
         <div className="controls">
           <div className="field">
             <label className="label">Cutoff (Europe/London)</label>
@@ -143,11 +152,12 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
         </div>
       </section>
 
-      {loading && !summary ? (
-        <Loading />
-      ) : error ? (
+      {error ? (
         <ErrorState message={error} onRetry={() => load(cutoff)} />
+      ) : loading && !summary ? (
+        <Loading />
       ) : (
+        <div style={loading ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
         <>
           <div className="metric-grid">
             <section className="card card-strong metric-card">
@@ -180,6 +190,7 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
 
           <ChartCard
             title="Error by forecast horizon"
+            right={loading && summary ? <span className="chip">Updating…</span> : undefined}
             subtitle="MAE bars per 6h bucket plus bias line"
             unitChip="MW"
             infoTooltip="Horizon = startTime - publishTime, grouped into 6h buckets."
@@ -197,12 +208,12 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Error by hour of day" subtitle="MAE bars and bias line per hour 0-23 UTC" unitChip="MW">
+          <ChartCard title="Error by hour of day" subtitle="MAE bars and bias line per hour 0-23 UTC" unitChip="MW" right={loading && summary ? <span className="chip">Updating…</span> : undefined}>
             <ResponsiveContainer width="100%" height={300}>
-              <ComposedChart data={(byHour?.hours ?? []).map((h) => ({ hour: h.hour, mae: h.metrics.mae, bias: h.metrics.bias, n: h.metrics.n, rmse: h.metrics.rmse, p90: h.metrics.p90_abs }))} margin={getChartMargin(12)}>
+              <ComposedChart data={(byHour?.hours ?? []).map((h) => ({ hour: h.hour, mae: h.metrics.mae, bias: h.metrics.bias, n: h.metrics.n, rmse: h.metrics.rmse, p90: h.metrics.p90_abs }))} margin={{ ...getChartMargin(12), left: 88 }}>
                 <CartesianGrid {...chartGridProps} />
                 <XAxis dataKey="hour" type="number" ticks={[...Array(24).keys()]} tickFormatter={(v) => String(v).padStart(2, '0')} tick={chartAxisTickProps} {...chartAxisLineProps} />
-                <YAxis type="number" {...yAxisProps} />
+                <YAxis type="number" {...yAxisProps} width={80} />
                 <Bar dataKey="mae" fill="#22d3ee" radius={[4, 4, 0, 0]} />
                 <Line dataKey="bias" stroke="#a78bfa" strokeWidth={2} dot={false} />
                 <Tooltip content={HourTooltip} />
@@ -210,7 +221,7 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
             </ResponsiveContainer>
           </ChartCard>
 
-          <ChartCard title="Error distribution" subtitle="Histogram of signed error in MW" unitChip="MW">
+          <ChartCard title="Error distribution" subtitle="Histogram of signed error in MW" unitChip="MW" right={loading && summary ? <span className="chip">Updating…</span> : undefined}>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={(errors?.bins ?? []).map((b) => ({ label: `${b.bin_start.toFixed(0)}`, start: b.bin_start, end: b.bin_end, count: b.count, center: (b.bin_start + b.bin_end) / 2 }))} margin={getChartMargin(12)}>
                 <CartesianGrid {...chartGridProps} />
@@ -273,7 +284,9 @@ export default function Accuracy({ onSelectDay }: { onSelectDay: (day: string) =
             )}
           </section>
         </>
+        </div>
       )}
+      <footer className="page-footer">Data: Elexon BMRS (FUELHH, WINDFOR), national wind, January 2026 decisions. Times in UTC.</footer>
     </div>
   )
 }
