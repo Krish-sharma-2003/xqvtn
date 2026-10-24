@@ -22,6 +22,8 @@ import { Chip } from '../components/Chip'
 import { ErrorState } from '../components/ErrorState'
 import { KpiCard } from '../components/KpiCard'
 import { Loading } from '../components/Loading'
+import { chartAxisLineProps, chartAxisTickProps, chartGridProps, getChartMargin } from '../components/chartTheme'
+import { Clock, Gauge, TrendingDown } from 'lucide-react'
 
 const MIN_DAY = '2026-01-02'
 const MAX_DAY = '2026-02-01'
@@ -222,13 +224,13 @@ function SensitivityChart({
   const width = useWindowWidth()
   return (
     <ResponsiveContainer width="100%" height={width < 640 ? 220 : 200}>
-      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 26, left: 64 }}>
+      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 28, left: 72 }}>
+        <CartesianGrid {...chartGridProps} />
         <XAxis
           dataKey="cutoff"
           type="category"
-          tick={{ fontSize: 11, fill: '#b6c2d6' }}
-          axisLine={false}
-          tickLine={false}
+          tick={chartAxisTickProps}
+          {...chartAxisLineProps}
         />
         <YAxis type="number" {...yAxisProps} domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 50) / 50) * 50, Math.ceil((dataMax + 50) / 50) * 50]} />
         <ReferenceLine x={selectedCutoff} stroke="var(--accent)" strokeDasharray="4 4" label={{ value: 'selected', position: 'top', fill: 'var(--accent)', fontSize: 11 }} />
@@ -298,9 +300,9 @@ function SeriesLegend({
   )
 }
 
-export default function Decision() {
+export default function Decision({ initialDay }: { initialDay?: string } = {}) {
   const width = useWindowWidth()
-  const [day, setDay] = useState(MIN_DAY)
+  const [day, setDay] = useState(initialDay && initialDay >= MIN_DAY && initialDay <= MAX_DAY ? initialDay : MIN_DAY)
   const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF)
   const [showActual, setShowActual] = useState(false)
   const [hoveredHour, setHoveredHour] = useState<number | null>(null)
@@ -505,15 +507,15 @@ export default function Decision() {
                 unitChip="MW"
               >
                 <ResponsiveContainer width="100%" height={width < 640 ? 240 : 300}>
-                  <ComposedChart data={chartData} margin={{ top: 18, right: 20, bottom: 44, left: 64 }}>
-                    <CartesianGrid strokeDasharray="2 2" stroke="rgba(255, 255, 255, 0.10)" vertical={false} />
+                  <ComposedChart data={chartData} margin={getChartMargin(12)}>
+                    <CartesianGrid {...chartGridProps} />
                     <XAxis
                       dataKey="hour"
                       type="number"
                       ticks={ticks}
                       tickFormatter={(value: unknown) => `${String(value).padStart(2, '0')}:00`}
-                      tickLine={false}
-                      axisLine={false}
+                      tick={chartAxisTickProps}
+                      {...chartAxisLineProps}
                       tickMargin={10}
                     />
                     <YAxis type="number" {...yAxisProps} domain={([dataMin, dataMax]: readonly [number, number]) => [Math.floor((dataMin - 100) / 100) * 100, Math.ceil((dataMax + 100) / 100) * 100]} />
@@ -545,15 +547,22 @@ export default function Decision() {
                 />
               </ChartCard>
 
-              <div className="kpi-grid">
+              <div className="kpi-grid kpi-grid-full">
                 <KpiCard
                   title="Publish time used"
                   value={fmtTime(points[0]?.publishTime ?? null)}
                   sub={horizonRange}
+                  icon={<Clock size={16} strokeWidth={1.75} />}
                 />
-                <KpiCard title="Mean forecast" value={summary?.forecast_mean?.toFixed(1) ?? '–'} unit="MW" />
-                <KpiCard title="Mean buffer" value={summary?.buffer_mean?.toFixed(1) ?? '–'} unit="MW" />
-                {showActual && <KpiCard title="Covered hours" value={`${coveredHours} of 24${summary?.in_sample ? ' (in-sample)' : ''}`} />}
+                <KpiCard title="Mean forecast" value={summary?.forecast_mean?.toFixed(1) ?? '–'} unit="MW" icon={<Gauge size={16} strokeWidth={1.75} />} />
+                <KpiCard title="Mean buffer" value={summary?.buffer_mean?.toFixed(1) ?? '–'} unit="MW" icon={<TrendingDown size={16} strokeWidth={1.75} />} />
+                {showActual && (
+                  <div className="kpi-card">
+                    <div className="kpi-title">Covered hours</div>
+                    <div className="kpi-value">{coveredHours} / 24</div>
+                    {summary?.in_sample ? <div className="kpi-sub"><span className="in-sample-badge">in-sample</span></div> : null}
+                  </div>
+                )}
                 <KpiCard
                   title="Cutoff (UTC)"
                   value={fmtUtc(summary?.cutoff_utc ?? null)}
@@ -563,15 +572,7 @@ export default function Decision() {
                 </KpiCard>
               </div>
 
-              {summary?.in_sample && (
-                <div style={{ padding: '0 18px 8px' }}>
-                  <Chip title="Fewer than three usable target days precede this decision day, so the error statistics fall back to all-January data. Treat the buffer as less reliable for this day.">
-                    in-sample buffer (limited history)
-                  </Chip>
-                </div>
-              )}
-
-              <ChartCard title="Cutoff sensitivity" subtitle="Cutoff sensitivity — mean forecast by cutoff time" unitChip="MW">
+              <ChartCard title="Cutoff sensitivity" subtitle="How the forecast changes if the gate closes earlier or later" unitChip="MW">
                 {sensData.length === 0 ? (
                   <div className="empty">No sensitivity data available for {fmtDay(day)}.</div>
                 ) : (

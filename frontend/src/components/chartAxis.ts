@@ -1,5 +1,5 @@
 export const yAxisProps = {
-  width: 64,
+  width: 72,
   tickMargin: 6,
   tick: { fontSize: 11, fill: '#b6c2d6' },
   axisLine: false,

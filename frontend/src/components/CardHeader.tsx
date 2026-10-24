@@ -6,15 +6,17 @@ interface CardHeaderProps {
   unitChip?: string
   infoTooltip?: string
   right?: ReactNode
+  icon?: ReactNode
 }
 
-export function CardHeader({ title, subtitle, unitChip, infoTooltip, right }: CardHeaderProps) {
+export function CardHeader({ title, subtitle, unitChip, infoTooltip, right, icon }: CardHeaderProps) {
   return (
     <header className="card-header">
       <div className="card-header-left">
         <span className="card-header-accent" aria-hidden="true" />
         <div className="card-header-text">
           <div className="card-header-title-row">
+            {icon ? <span className="card-header-icon">{icon}</span> : null}
             <h2 className="card-header-title">{title}</h2>
             {unitChip ? (
               <span
