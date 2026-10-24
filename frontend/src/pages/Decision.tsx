@@ -5,6 +5,8 @@ import {
   ComposedChart,
   Line,
   LineChart,
+  ReferenceLine,
+  Scatter,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -215,7 +217,7 @@ function SensitivityChart({
 }) {
   return (
     <ResponsiveContainer width="100%" height={180}>
-      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 26, left: 34 }}>
+      <LineChart data={data} margin={{ top: 10, right: 16, bottom: 26, left: 52 }}>
         <XAxis
           dataKey="cutoff"
           type="category"
@@ -285,6 +287,8 @@ export default function Decision() {
   const [day, setDay] = useState(MIN_DAY)
   const [cutoff, setCutoff] = useState(DEFAULT_CUTOFF)
   const [showActual, setShowActual] = useState(false)
+  const [hoveredHour, setHoveredHour] = useState<number | null>(null)
+  const [howOpen, setHowOpen] = useState(false)
   const [hidden, setHidden] = useState<Set<SeriesKey>>(new Set())
   const [data, setData] = useState<DecisionResponse | null>(null)
   const [sensitivity, setSensitivity] = useState<CutoffSensitivityResponse | null>(null)
@@ -397,8 +401,28 @@ export default function Decision() {
     runFetch(day, nextCutoff)
   }
 
+  const conservativeMean = summary && summary.forecast_mean !== null && summary.buffer_mean !== null ? (summary.forecast_mean ?? 0) - (summary.buffer_mean ?? 0) : null
+  const coveredHours = showActual ? points.filter((p) => p.actual !== null && p.conservative !== null && (p.actual as number) >= (p.conservative as number)).length : 0
+
   return (
     <div className="decision">
+      <section className="card">
+        <div style={{ padding: '14px 18px' }}>
+          <p style={{ margin: 0, fontWeight: 600 }}>
+            Plan for ~{conservativeMean !== null ? conservativeMean.toFixed(0) : '–'} MW of wind (mean conservative forecast) and hold ~{summary?.buffer_mean?.toFixed(0) ?? '–'} MW backup (mean buffer). Forecast published {fmtTime(points[0]?.publishTime ?? null)} UTC, {points[0]?.horizon_h?.toFixed(1) ?? '–'}-{points[points.length-1]?.horizon_h?.toFixed(1) ?? '–'} h ahead.
+          </p>
+          <button aria-expanded={howOpen} onClick={() => setHowOpen((v) => !v)} style={{ marginTop: 8, background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', padding: 0 }}>
+            How to read this
+          </button>
+          {howOpen && (
+            <ul style={{ margin: '6px 0 0 18px', color: 'var(--text-muted)', fontSize: 13 }}>
+              <li>Forecast: latest published wind forecast for each hour.</li>
+              <li>Conservative: forecast reduced by the historical shortfall percentile.</li>
+              <li>Risk buffer: forecast minus conservative, the volume to back up.</li>
+            </ul>
+          )}
+        </div>
+      </section>
       <section className="card">
         <div className="controls">
           <div className="field">
@@ -433,10 +457,18 @@ export default function Decision() {
             </div>
           </div>
           <div className="field">
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: 0 }}>
-              <input type="checkbox" checked={showActual} onChange={(event) => setShowActual(event.target.checked)} />
-              Show hindsight actuals
-            </label>
+            <button
+              role="switch"
+              aria-checked={showActual}
+              onClick={() => setShowActual((v) => !v)}
+              onKeyDown={(e) => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); setShowActual((v) => !v) } }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', background: 'none', border: 'none', color: 'var(--text)', padding: 0 }}
+            >
+              <span style={{ width: 34, height: 18, borderRadius: 9, background: showActual ? 'var(--accent)' : 'rgba(255,255,255,0.15)', position: 'relative', transition: 'background .2s' }}>
+                <span style={{ position: 'absolute', top: 2, left: showActual ? 18 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'left .2s' }} />
+              </span>
+              Hindsight actuals: {showActual ? 'Shown' : 'Hidden'}
+            </button>
           </div>
         </div>
       </section>
@@ -453,7 +485,7 @@ export default function Decision() {
             <>
               <ChartCard title={`Decision forecast — ${fmtDay(day)}`}>
                 <ResponsiveContainer width="100%" height={width < 640 ? 240 : 300}>
-                  <ComposedChart data={chartData} margin={{ top: 18, right: 20, bottom: 44, left: 48 }}>
+                  <ComposedChart data={chartData} margin={{ top: 18, right: 20, bottom: 44, left: 64 }}>
                     <CartesianGrid strokeDasharray="2 2" stroke="rgba(255, 255, 255, 0.10)" vertical={false} />
                     <XAxis
                       dataKey="hour"
@@ -485,6 +517,8 @@ export default function Decision() {
                     {showActual && !isHidden('actual') && (
                       <Line type="monotone" dataKey="actual" stroke="#f472b6" strokeWidth={2} strokeDasharray="2 4" dot={false} />
                     )}
+                    {hoveredHour !== null && <ReferenceLine x={hoveredHour} stroke='rgba(255,255,255,0.4)' />}
+                    {showActual && <Scatter data={chartData.filter((p) => p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number))} fill='#f87171' />}
                     <Tooltip content={ChartTooltip} />
                   </ComposedChart>
                 </ResponsiveContainer>
@@ -504,6 +538,7 @@ export default function Decision() {
                 />
                 <KpiCard title="Mean forecast" value={summary?.forecast_mean?.toFixed(1) ?? '–'} unit="MW" />
                 <KpiCard title="Mean buffer" value={summary?.buffer_mean?.toFixed(1) ?? '–'} unit="MW" />
+                {showActual && <KpiCard title="Covered hours" value={`${coveredHours} of 24${summary?.in_sample ? ' (in-sample)' : ''}`} />}
                 <KpiCard
                   title="Cutoff (UTC)"
                   value={fmtUtc(summary?.cutoff_utc ?? null)}
@@ -523,7 +558,34 @@ export default function Decision() {
                 {sensData.length === 0 ? (
                   <div className="empty">No sensitivity data available for {fmtDay(day)}.</div>
                 ) : (
-                  <SensitivityChart data={sensData} onPick={handleSensitivityPick} />
+                  <>
+                    <SensitivityChart data={sensData} onPick={handleSensitivityPick} />
+                    <table style={{ marginTop: 10, width: '100%', fontSize: 12 }}>
+                      <thead><tr><th>Cutoff</th><th>Publish time</th><th>Mean forecast</th><th>Delta vs selected</th></tr></thead>
+                      <tbody>
+                        {sensData.map((c) => {
+                          const selectedMean = summary?.forecast_mean ?? sensData.find((x) => x.cutoff === cutoff)?.mean_forecast ?? null
+                          const delta = (c.mean_forecast ?? 0) - (selectedMean ?? 0)
+                          return (
+                            <tr key={c.cutoff} onClick={() => handleSensitivityPick(c.cutoff)} style={{ cursor: 'pointer' }}>
+                              <td>{c.cutoff}</td>
+                              <td>{fmtTime(c.publishTime)}</td>
+                              <td>{fmtMw(c.mean_forecast)}</td>
+                              <td style={{ color: delta > 0 ? 'var(--accent)' : delta < 0 ? 'var(--danger)' : 'inherit' }}>
+                                {delta > 0 ? '▲' : delta < 0 ? '▼' : ''} {delta.toFixed(1)} MW
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      <tr style={{ fontWeight: 700 }}>
+                        <td>{cutoff} (selected)</td>
+                        <td>{fmtTime(points[0]?.publishTime ?? null)}</td>
+                        <td>{fmtMw(summary?.forecast_mean ?? null)}</td>
+                        <td>0.0 MW</td>
+                      </tr>
+                      </tbody>
+                    </table>
+                  </>
                 )}
               </ChartCard>
 
@@ -542,12 +604,12 @@ export default function Decision() {
                   </thead>
                   <tbody>
                     {points.map((p, index) => (
-                      <tr key={String(index)}>
+                      <tr key={String(index)} onMouseEnter={() => setHoveredHour(index)} onMouseLeave={() => setHoveredHour(null)} style={showActual && p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number) ? { background: 'rgba(248,113,113,0.15)' } : undefined}>
                         <td>{String(index).padStart(2, '0')}:00</td>
                         <td className="num">{fmtMw(p.forecast)}</td>
                         <td className="num">{fmtMw(p.conservative)}</td>
                         <td className="num">{fmtMw(p.buffer)}</td>
-                        <td className="num">{fmtMw(p.actual)}</td>
+                        <td className="num">{fmtMw(p.actual)}{showActual && p.actual !== null && p.conservative !== null && (p.actual as number) < (p.conservative as number) ? ' shortfall' : ''}</td>
                         <td>{fmtTime(p.publishTime)}</td>
                         <td className="num">{fmtHorizon(p.horizon_h)}</td>
                       </tr>
