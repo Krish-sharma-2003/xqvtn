@@ -189,7 +189,7 @@ def error_histogram(errors: list[float], bin_width: float) -> list[dict]:
         current = bin_end
     # Assign each error to bin: bin index = floor((e - bin_start)/bin_width)
     for e in errors:
-        b = math.floor((e - bin_start) / bin_width) * bin_width
+        b = bin_start + math.floor((e - bin_start) / bin_width) * bin_width
         if b not in bins_dict:
             # Extend if necessary
             # but should be covered

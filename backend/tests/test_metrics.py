@@ -195,3 +195,16 @@ def test_allowed_stat_days_cutoff():
     assert in_sample is False
     # target-2 = 2026-01-03, so days <= 2026-01-03 are 1,2,3
     assert allowed == {date(2026, 1, 1), date(2026, 1, 2), date(2026, 1, 3)}
+
+
+def test_error_histogram_positions_and_total():
+    errs = [-700.0, -100.0, 1200.0, 1300.0, 5100.0]
+    bins = error_histogram(errs, 500.0)
+    assert sum(b["count"] for b in bins) == len(errs)
+    by_start = {b["bin_start"]: b["count"] for b in bins}
+    assert by_start[-1000.0] == 1
+    assert by_start[-500.0] == 1
+    assert by_start[1000.0] == 2
+    assert by_start[5000.0] == 1
+    mean = sum((b["bin_start"] + b["bin_end"]) / 2 * b["count"] for b in bins) / len(errs)
+    assert abs(mean - sum(errs) / len(errs)) <= 250.0
